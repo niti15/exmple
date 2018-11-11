@@ -1,0 +1,197 @@
+---
+
+- name: run the playbook tasks on the localhost
+  hosts: localhost
+  become: yes
+  vars:
+    do_token: "{{ hostvars['localhost']['dropletoken'] }}"
+  tasks:
+
+  - name: ensure ssh key exists
+    user: >
+      name={{ ansible_user_id }}
+      generate_ssh_key=yes
+      ssh_key_file=.ssh/id_rsa
+          
+  - name: ensure key exists at DigitalOcean
+    digital_ocean: >
+      state=present
+      command=ssh
+      name=justOps_key
+      ssh_pub_key={{ lookup('file', '~/.ssh/id_rsa.pub') }}
+      api_token={{ do_token }}
+    register: my_ssh_key
+
+  - debug: msg="IP is {{ my_ssh_key.ssh_key.id }}"   
+
+  - name: ensure droplet one exists
+    digital_ocean: >
+      state=present
+      command=droplet
+      name="{{ hostvars['localhost']['job'] }}-slave"
+      size_id=2gb
+      region_id=sgp1
+      image_id=ubuntu-14-04-x64
+      ssh_key_ids={{ my_ssh_key.ssh_key.id }}
+      api_token={{ do_token }}
+    register: droplet_one
+
+  - name: add a host with a non-standard port local to your machines
+    add_host:
+      hostname: new_host
+      ansible_host: "{{ droplet_one.droplet.ip_address }}"
+      ansible_user: root
+        # This is reliant on sshpass being installed
+      # ansible_password: root
+
+  - name: Add IP address of all hosts to all hosts
+    lineinfile:
+      dest: hosts
+      line: "[new_host] \n {{ hostvars['new_host'].ansible_host }} ansible_user=root"
+      state: present
+    with_items: "{{ groups.all }}"  
+
+  # - name: add private key on jenkins 
+  #   copy:
+  #     content: "<com.cloudbees.jenkins.plugins.sshcredentials.impl.BasicSSHUserPrivateKey plugin='ssh-credentials@1.13'> <scope>GLOBAL</scope> <id>{{hostvars['localhost']['job']}}_key</id> <description>stage droplet private key</description> <username>root</username> <privateKeySource class='com.cloudbees.jenkins.plugins.sshcredentials.impl.BasicSSHUserPrivateKey$DirectEntryPrivateKeySource'> <privateKey>{{lookup('file', '~/.ssh/id_rsa') }}</privateKey> </privateKeySource></com.cloudbees.jenkins.plugins.sshcredentials.impl.BasicSSHUserPrivateKey>"
+  #     dest: "{{hostvars['localhost']['job']}}_key.xml"
+  #     force: no
+  #     mode: 0777
+  #   register: "{{hostvars['localhost']['job']}}_key"
+
+  #- shell: cat "{{hostvars['localhost']['job']}}_key.xml" | java -jar jenkins-cli.jar -s http://matrix:matrix123@165.227.17.82:8080/ create-credentials-by-xml system::system::jenkins "(global)"
+
+  - name: remove file
+    file:
+      path: "{{hostvars['localhost']['job']}}_key"
+      state: absent
+      
+  - debug: msg="IP is {{ droplet_one.droplet.ip_address }}" 
+
+  - set_fact: droplet_ip={{droplet_one.droplet.ip_address}}
+
+-
+
+  # Target: where our play will run and options it will run with
+  hosts: new_host
+
+  # Task: the list of tasks that will be executed within the play, this section
+  # can also be used for pre and post tasks
+  tasks:
+
+  - ping:
+  - name: ensure repository key is installed
+    apt_key:
+      id: "58118E89F3A912897C070ADBF76221572C52609D"
+      keyserver: "hkp://p80.pool.sks-keyservers.net:80"
+      state: present
+
+  - name: ensure docker registry is available
+    # For Ubuntu 14.04 LTS, use this repository:
+    apt_repository: repo='deb https://apt.dockerproject.org/repo ubuntu-trusty main' state=present
+    # For Ubuntu 16.04 LTS, use this repo instead:
+    # apt_repository: repo='deb https://apt.dockerproject.org/repo ubuntu-xenial main' state=present
+
+  - name: ensure docker and dependencies are installed
+    apt: name=docker-engine update_cache=yes
+
+  # Uncomment the following to enable insecure registries with Docker
+  #- name: ensure docker can use insecure registries in 10.11.0.0/16
+  #  lineinfile: "dest=/etc/default/docker regexp=^DOCKER_OPTS line=DOCKER_OPTS='--insecure-registry 10.11.0.0/16'"
+
+  - service: name=docker state=restarted
+
+  - name: Install latest version of "python-pip" ignoring "install-recommends"
+    apt:
+      name: python-pip
+      state: latest
+      install_recommends: yes
+
+  - pip:
+     name: docker-py
+
+  - name: ensure file exists
+    copy:
+      content: '{ "insecure-registries": ["{{ hostvars["localhost"]["registery_ip"] }}"]}'
+      dest: "/etc/docker/daemon.json"
+      force: no
+      mode: 0777
+    register: configname
+
+  - service: name=docker state=restarted      
+
+  - name: add repo for java 8
+    apt_repository: repo='ppa:webupd8team/java' state=present
+
+  - name: set licence selected
+    shell: /bin/echo debconf shared/accepted-oracle-license-v1-1 select true | /usr/bin/debconf-set-selections
+    sudo: yes
+
+  - name: set licence seen
+    shell: /bin/echo debconf shared/accepted-oracle-license-v1-1 seen true | /usr/bin/debconf-set-selections
+    sudo: yes
+
+  - name: install java 8
+    apt: name=oracle-java8-installer state=latest update-cache=yes force=yes
+    sudo: yes     
+    
+- 
+  hosts: jenkins
+  become: yes
+  remote_user: root
+  gather_facts: no
+  pre_tasks:
+   - name: 'install python2'
+     raw: sudo apt-get -y install python-simplejson
+  tasks:
+
+  - name: example copying file with owner and permissions
+    copy:
+      src: ~/.ssh/known_hosts
+      dest: ~/.ssh/known_hosts
+      owner: root
+      group: root
+      mode: 0777     
+      
+  - name: Copy the known_hosts to container 
+    shell: "docker cp /root/.ssh/known_hosts fcf3638cea29:/var/jenkins_home/.ssh/"     
+
+-
+
+  # Target: where our play will run and options it will run with
+  hosts: localhost
+  connection: local
+  become: yes
+  vars:
+    name: slavers
+    randomnum: "{{ 1024511 | random }}"
+    slavename: "{{ hostvars['localhost']['job'] }}-slave"
+    configname: "config_{{randomnum}}.xml"
+    ip_address: "{{ hostvars['localhost']['droplet_ip'] }}"
+  # Task: the list of tasks that will be executed within the play, this section
+  # can also be used for pre and post tasks
+  tasks:
+
+  - name: ensure file exists
+    copy:
+      content: '<?xml version="1.0" encoding="UTF-8"?><slave><name>{{slavename}}</name><description>slave node</description><remoteFS>/var/jenkins_home</remoteFS><numExecutors>1</numExecutors><mode>EXCLUSIVE</mode><retentionStrategy class="hudson.slaves.RetentionStrategy$Always"/><launcher class="hudson.plugins.sshslaves.SSHLauncher" plugin="ssh-slaves@1.26"><host>{{ip_address}}</host><port>22</port><credentialsId>dropletkey</credentialsId><maxNumRetries>0</maxNumRetries><retryWaitTime>0</retryWaitTime><sshHostKeyVerificationStrategy class="hudson.plugins.sshslaves.verifiers.KnownHostsFileKeyVerificationStrategy"/></launcher><label>{{slavename}}</label><nodeProperties/></slave>'
+      dest: "{{configname}}"
+      force: no
+      mode: 0777
+    register: configname  
+
+  # - name: Copy the known_hosts to container 
+    # shell: "docker cp /Users/apple/.ssh/known_hosts 5afa492c949b:/var/jenkins_home/.ssh/"   
+
+  - name: Create jenkins slave node
+    shell: cat "{{configname.dest}}" | java -jar jenkins-cli.jar -s http://matrix:matrix123@165.227.17.82:8080/ create-node {{slavename}}
+
+  - name: remove file
+    file:
+      path: "{{configname.dest}}"
+      state: absent
+
+  - name: Create build
+    shell: java -jar jenkins-cli.jar -s http://matrix:matrix123@165.227.17.82:8080/ build {{ hostvars['localhost']['job'] }}
+#   # Three dots indicate the end of a YAML document
+... 

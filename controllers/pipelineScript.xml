@@ -1,0 +1,861 @@
+<?xml version="1.1" encoding="UTF-8"?>
+<flow-definition plugin="workflow-job@2.15">
+  <actions/>
+  <description></description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+      <triggers/>
+    </org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@2.46">
+    <script>
+      import groovy.json.JsonSlurperClassic
+    @NonCPS
+    def parseJsonToMap(String json) {
+        final slurper = new JsonSlurperClassic()
+        return new HashMap&lt;&gt;(slurper.parseText(json))
+    }
+
+    def finalStatusSend(buildStatus)
+    {
+      script
+        {
+            def post = new URL(&quot;_domainUrl/job/updateFinalBuild&quot;).openConnection();
+            echo &quot;url passing value ${JOB_NAME} ${BUILD_NUMBER}&quot;
+            def builder = new groovy.json.JsonBuilder()
+            def result = [&quot;jobJenkinsName&quot;:JOB_NAME,&quot;buildNumber&quot;:BUILD_NUMBER,&quot;buildStatus&quot;:buildStatus]
+            builder result
+            out = builder.toPrettyString()
+            echo out
+            def message = out
+            post.setRequestMethod(&quot;POST&quot;)
+            post.setDoOutput(true)
+            post.setRequestProperty(&quot;Content-Type&quot;, &quot;application/json&quot;)
+            post.getOutputStream().write(message.getBytes(&quot;UTF-8&quot;));
+            def postRC = post.getResponseCode();
+            println(postRC);
+            if(postRC.equals(200))
+              {
+                echo &quot;final status success method called&quot;
+                echo post.getInputStream().getText()
+              }
+        }
+    }
+
+    def buildStatus(testCase,finalresult)
+    {
+           script
+           {
+             def post = new URL(&quot;_domainUrl/job/updateBuildHistory&quot;).openConnection();
+             def builder = new groovy.json.JsonBuilder()
+             def result = [&quot;jobJenkinsName&quot;:JOB_NAME,&quot;buildNumber&quot;:BUILD_NUMBER,&quot;testCase&quot;:testCase,&quot;testCaseResult&quot;:finalresult]
+             builder result
+             out = builder.toPrettyString()
+             def message = out
+             post.setRequestMethod(&quot;POST&quot;)
+             post.setDoOutput(true)
+             post.setRequestProperty(&quot;Content-Type&quot;, &quot;application/json&quot;)
+             post.getOutputStream().write(message.getBytes(&quot;UTF-8&quot;));
+             def postRC = post.getResponseCode();
+             if(postRC.equals(200))
+               {
+                 echo post.getInputStream().getText()
+                }
+
+            }
+    }
+
+    def mongoOut(){
+           def result = sh  &quot;mongo --quiet &apos;_mongoDbUrl&apos; --eval &apos;db.registries.find({ job: \&quot;_userToken-registry\&quot; })&apos; | tee file.json&quot;
+           sh &quot;sed -i -- &apos;s/ObjectId//&apos; file.json&quot;
+           sh &quot;sed -i -- &apos;s/(//&apos; file.json&quot;
+           sh &quot;sed -i -- &apos;s/)//&apos; file.json&quot;
+           def json= readFile(file:&quot;file.json&quot;)
+           if(&quot;${json}&quot; !=&quot;&quot;)
+           {
+           return parseJsonToMap(json).ip
+           }else{
+           return &apos;&apos;;
+           }
+    }
+
+    def checkslave(){
+        def result = sh  &quot;mongo --quiet &apos;_mongoDbUrl&apos; --eval &apos;db.slaves.find({ job: \&quot;_userToken-slave\&quot; })&apos; | tee file.json&quot;
+        sh &quot;sed -i -- &apos;s/ObjectId//&apos; file.json&quot;
+        sh &quot;sed -i -- &apos;s/(//&apos; file.json&quot;
+        sh &quot;sed -i -- &apos;s/)//&apos; file.json&quot;
+        def json= readFile(file:&quot;file.json&quot;)
+        if(&quot;${json}&quot; !=&quot;&quot;)
+        {
+          return parseJsonToMap(json).privateKey
+        }else{
+        return &apos;&apos;;
+        }
+    }
+
+    def checkUTFileExist(){
+        def testFile = new File(&quot;${WORKSPACE}&quot;)
+        def json = readFile(file:&apos;.//package.json&apos;)
+        def data = parseJsonToMap(json)
+        echo &quot;json mehtod called ${data}&quot;
+        echo  &quot;check the mocha path exist or not&quot;
+        def utScript = data.scripts.&apos;test-mochaawesome&apos;
+        def (value1, value2, value3, pathValue, value5, value6) = utScript.tokenize( &apos; &apos; )
+        if (value1 == &quot;nyc&quot; &amp;&amp; value2 == &quot;--reporter=html&quot; &amp;&amp; value3 == &quot;mocha&quot; &amp;&amp; value5 == &quot;--reporter&quot; &amp;&amp; value6 == &quot;mochawesome&quot;)
+        {
+           echo &quot;there&quot;
+          def isExist = addArray(pathValue.trim().split(&apos;/&apos;))
+          echo &quot;unit test status inside a unit test stage ${isExist}&quot;
+          if(isExist)
+          {
+            return true
+          }
+          else
+          {
+            return false
+          }
+        }
+        else
+        {
+          echo &quot;there is no mocha json field is not avilable.&quot;
+          return false
+        }
+    }
+
+    def addArray(list) {
+       script
+        {
+            def testFile = new File(&quot;${WORKSPACE}&quot;)
+            echo &quot;json value in testFile ${testFile}&quot;
+            def status =&quot;&quot;
+            def path = &quot;&quot;
+            for (int i = 0; i &lt; list.size()-1; i++) {
+            path =&quot;${path}/${list[i]}&quot;
+        }
+        def concatVar = &quot;${testFile}${path}&quot;
+        echo &quot;concatvar ${concatVar}&quot;
+        if(fileExists(concatVar))
+        {
+            echo &quot;file exist true part&quot;
+           status = &quot;true&quot;
+        }
+        else
+        {
+            echo &quot;file exist not true part&quot;
+           status = &quot;false&quot;
+        }
+    return status
+     }
+  }
+
+    def checkE2eFileExist()
+    {
+      def testFile = new File(&quot;${WORKSPACE}&quot;)
+      def json = readFile(file:&apos;.//package.json&apos;)
+      def data = parseJsonToMap(json)
+      echo &quot;json mehtod called ${data}&quot;
+      echo  &quot;check the e2e path exist or not&quot;
+      def pathValue = data.scripts.&apos;e2etest&apos;.trim().toString()
+      if((data.scripts.&apos;e2etest&apos;)?.trim())
+      {
+        def isExist =  addArray(data.scripts.&apos;e2etest&apos;.trim().split(&apos;/&apos;))
+        echo &quot;current working path for e2e ${isExist}&quot;
+        if(isExist)
+        {
+          return pathValue
+        }
+        else
+        {
+          return null
+        }
+      }
+      else
+      {
+        echo &quot;there is no e2e json field is not avilable.&quot;
+        return null
+      }
+    }
+
+    def checkstage(){
+        def result = sh  &quot;mongo --quiet &apos;_mongoDbUrl&apos; --eval &apos;db.stages.find({ job: \&quot;${JOB_NAME}-stage\&quot; })&apos; | tee file.json&quot;
+        sh &quot;sed -i -- &apos;s/ObjectId//&apos; file.json&quot;
+        sh &quot;sed -i -- &apos;s/(//&apos; file.json&quot;
+        sh &quot;sed -i -- &apos;s/)//&apos; file.json&quot;
+        def json= readFile(file:&quot;file.json&quot;)
+        if(&quot;${json}&quot; !=&quot;&quot;)
+        {
+          return parseJsonToMap(json)
+        }else{
+          return &apos;&apos;;
+          }
+    }
+
+    pipeline
+    {
+       agent any
+       environment
+       {
+          JENKINS_USER = &apos;root&apos;
+          unitTest = &apos;_unitTest;&apos;
+          codeCoverage = &apos;_codeCoverage;&apos;
+          codeReview = &apos;_codeReview;&apos;
+          e2eTest = &apos;_e2eTest;&apos;
+          performanceTest = &apos;_performanceTest;&apos;
+          isEmailEnabled = &apos;_isEmailEnabled;&apos;
+          isSlackEnabled = &apos;_isSlackEnabled;&apos;
+          isStaging = &apos;_isStaging;&apos;
+          unitStatus = &apos;_unitStatus&apos;
+          ccStatus = &apos;_ccStatus&apos;
+          crStatus = &apos;_crStatus&apos;
+          e2eStatus = &apos;_e2eStatus&apos;
+          performanceStatus = &apos;_performanceStatus&apos;
+          triggerStatus = &apos;_triggerStatus;&apos;
+        }
+
+        stages
+        {
+          stage(&apos;Begin&apos;)
+          {
+              steps {
+              script{
+              try{
+              if(isEmailEnabled == &quot;true&quot;){
+                 echo &apos;Sending mail&apos;
+                 notifyEmailSend(&quot;STARTED&quot;)
+               }
+               if(isSlackEnabled == &quot;true&quot;){
+                   echo &apos;Sending to Slack&apos;
+                   notifyBuild(&quot;STARTED&quot;)
+                 }
+              }
+              catch (err) {
+              echo &apos;Sending FAILED&apos;
+              }
+            }
+              echo &apos;Begin!&apos;
+            }
+          }
+
+          stage(&apos;Create registry&apos;)
+          {
+            when {
+              environment name: &apos;isStaging&apos;, value: &apos;true&apos;
+            }
+            steps {
+              script
+              {
+                if(mongoOut() == &apos;&apos;)
+                {
+                sh &apos;ansible-playbook /etc/ansible/registry.yml --extra-vars &quot;dropletoken=_api job=${JOB_NAME} name=_userToken-registry mongoUrl=_mongoDbUrl&quot;&apos;
+                }
+              }
+            }
+          }
+
+          stage(&apos;Create slave&apos;)
+          {
+            steps {
+              script
+              {
+                  if(isStaging==&apos;true&apos;)
+                  {
+                    def reg_ip_address = mongoOut()
+                    if(reg_ip_address !=&quot;&quot; &amp;&amp; checkslave() ==&apos;&apos;)
+                    {
+                      sh &quot;ansible-playbook /etc/ansible/slave.yml --extra-vars &apos;dropletoken=_api job=${JOB_NAME} name=_userToken-slave registery_ip=${reg_ip_address}:5000 jenkisMaster=_jenkinsUrL mongoUrl=_mongoDbUrl&apos;&quot;
+                    }
+                  }
+                  else
+                  {
+                       echo &quot;Default Registry Calling&quot;
+                       def reg_ip_address = &apos;127.0.0.1&apos;
+                       if(checkslave() == &apos;&apos;)
+                       {
+                       sh &quot;ansible-playbook /etc/ansible/slave.yml --extra-vars &apos;dropletoken=_api job=${JOB_NAME} name=_userToken-slave registery_ip=${reg_ip_address}:5000 jenkisMaster=_jenkinsUrL mongoUrl=_mongoDbUrl&apos;&quot;
+                       }
+                  }
+              }
+            }
+          }
+
+          stage(&apos;main&apos;)
+          {
+             agent
+             {
+               docker {
+                 image &apos;justops/ansible-ubuntu1604-python-nodejs&apos;
+                 args &apos;-u root -v /usr/bin/docker:/usr/bin/docker -v /var/run/docker.sock:/var/run/docker.sock -p 3030:3000 _envCmd&apos;
+                 label &quot;_userToken-slave&quot;
+               }
+             }
+             stages
+             {
+                  stage(&quot;Checkout&quot;)
+                  {
+                    steps {
+                        checkout changelog: false, poll: false,
+                        scm: [$class: &apos;GitSCM&apos;,
+                        branches: [[name: &apos;*/_branchName&apos;]],
+                        doGenerateSubmoduleConfigurations: false, extensions: [],
+                        submoduleCfg: [], userRemoteConfigs: [[url: &apos;_sourceurl&apos;]]]
+                    }
+                  }
+
+                  stage(&apos;Build&apos;) {
+                      steps {
+                          sh &apos;npm install&apos;
+                      }
+                  }
+
+              stage(&apos;Continous Testing - Unit Test&apos;)
+              {
+                      when {
+                        environment name: &apos;unitTest&apos;, value: &apos;true&apos;
+                      }
+                steps {
+                   script {
+                      def value = checkUTFileExist();
+                      echo &quot;unit test status inside a unit test stage ${value}&quot;
+                      if(value)
+                      {
+                        echo &quot;test-mochaawesome inside a build stage ut running&quot;
+                        if(unitStatus==&quot;1&quot;)
+                        {
+                           echo &quot;Optional State Execution&quot;
+                           def statusUt=&quot;true&quot;
+                           try
+                           {
+                              sh &apos;npm i mochawesome&apos;
+                              sh &quot;npm run test-mochaawesome&quot;
+                            }
+                            catch (err)
+                            {
+                              buildStatus(&apos;0&apos;,&apos;1&apos;)
+                              echo &quot;unsuccessful UT&quot;
+                              statusUt=&quot;false&quot;
+                            }
+                                  // publish html
+                                  publishHTML target: [
+                                      allowMissing: false,
+                                      alwaysLinkToLastBuild: false,
+                                      keepAll: true,
+                                      reportDir: &apos;mochawesome-report&apos;,
+                                      reportFiles: &apos;mochawesome.html&apos;,
+                                      reportName: &apos;Unit Testing Report&apos;
+                                  ]
+                                  if(statusUt == &quot;true&quot;)
+                                  {
+                                     buildStatus(&apos;0&apos;,&apos;0&apos;)
+                                  }
+                              }
+                              else if (unitStatus==&quot;2&quot;)
+                              {
+                                  echo &quot;Confirmed State Execution&quot;
+                                  sh &apos;npm i mochawesome&apos;
+                                  sh &quot;npm run-script env -- mocha ${value} --reporter mochawesome&quot;
+                                  // publish html
+                                  publishHTML target: [
+                                      allowMissing: false,
+                                      alwaysLinkToLastBuild: false,
+                                      keepAll: true,
+                                      reportDir: &apos;mochawesome-report&apos;,
+                                      reportFiles: &apos;mochawesome.html&apos;,
+                                      reportName: &apos;Unit Testing Report&apos;
+                                  ]
+                                  buildStatus(&apos;0&apos;,&apos;0&apos;)
+                              }
+                              else
+                              {
+                                  echo &quot;Something Went Wrong&quot;
+                              }
+
+                }
+                else
+                {
+                    buildStatus(&apos;0&apos;,&apos;2&apos;)
+                }
+
+
+
+                          }
+
+
+                      }
+                  }
+
+                  stage(&apos;Continous Testing - Code Coverage Test&apos;)
+                  {
+                      when {
+                        environment name: &apos;codeCoverage&apos;, value: &apos;true&apos;
+                      }
+                      steps {
+                      script {
+                      if(ccStatus==&quot;1&quot;)
+                      {
+                            def statusCct=&quot;true&quot;
+                            echo &quot;Optional State Execution&quot;
+                            try {
+                            sh &apos;npm i mochawesome&apos;
+                            sh &apos;npm test&apos;
+                            }
+                            catch (err) {
+                              statusCct=&quot;false&quot;
+                              echo err
+                            }
+                            // publish html
+                            publishHTML target: [
+                                allowMissing: false,
+                                alwaysLinkToLastBuild: false,
+                                keepAll: true,
+                                reportDir: &apos;coverage&apos;,
+                                reportFiles: &apos;index.html&apos;,
+                                reportName: &apos;Code Coverage Testing Report&apos;
+                            ]
+                            if(statusCct == &quot;true&quot;)
+                            {
+                               buildStatus(&apos;1&apos;,&apos;0&apos;)
+                            }
+                      }
+                      else if (ccStatus==&quot;2&quot;)
+                      {
+                          echo &quot;Confirmed State Execution&quot;
+                          sh &apos;npm i mochawesome&apos;
+                          sh &apos;npm test&apos;
+                          // publish html
+                          publishHTML target: [
+                              allowMissing: false,
+                              alwaysLinkToLastBuild: false,
+                              keepAll: true,
+                              reportDir: &apos;coverage&apos;,
+                              reportFiles: &apos;index.html&apos;,
+                              reportName: &apos;Code Coverage Testing Report&apos;
+                          ]
+                          buildStatus(&apos;1&apos;,&apos;0&apos;)
+                      }
+                      else
+                      {
+                           echo &quot;Something Went Wrong&quot;
+                      }
+                      }
+                      }
+                  }
+
+                  stage(&apos;Continous Inspection - Code Review&apos;)
+                  {
+                      when {
+                        environment name: &apos;codeReview&apos;, value: &apos;true&apos;
+                      }
+                      steps {
+                        script {
+                        if(crStatus==&quot;1&quot;)
+                        {
+                            def statusCr=&quot;true&quot;
+                            echo &quot;Optional State Execution&quot;
+                            try {
+                              sh &apos;sonar-scanner -Dsonar.projectKey=${JOB_NAME} -Dsonar.projectName=${JOB_NAME}  -Dsonar.sources=.   -Dsonar.host.url=_sonarUrl  -Dsonar.login=_sonarLogin&apos;
+                              if(env.triggerStatus){
+                                    sh &quot;git config --get remote.origin.url &gt; .git/repo&quot;
+                                    repoUser = (readFile(&apos;.git/repo&apos;).trim().tokenize( &apos;/&apos; ))[2]
+                                    repoName = (((readFile(&apos;.git/repo&apos;).trim().tokenize( &apos;/&apos; ))[3]).tokenize( &apos;.&apos; ))[0]
+                                    buildTrigger(&quot;${repoUser}/${repoName}&quot;,&quot;${JOB_NAME}&quot;);
+                                 }
+                            }
+                            catch (err) {
+                              statusCr=&quot;false&quot;
+                              echo err
+                            }
+                            if(statusCr == &quot;true&quot;)
+                            {
+                               buildStatus(&apos;2&apos;,&apos;0&apos;)
+                            }
+                        }
+                        else if (crStatus==&quot;2&quot;)
+                        {
+                            echo &quot;Confirmed State Execution&quot;
+                            sh &apos;sonar-scanner -Dsonar.projectKey=${JOB_NAME} -Dsonar.projectName=${JOB_NAME}  -Dsonar.sources=.   -Dsonar.host.url=_sonarUrl  -Dsonar.login=_sonarLogin&apos;
+                            if(env.triggerStatus){
+                                sh &quot;git config --get remote.origin.url &gt; .git/repo&quot;
+                                repoUser = (readFile(&apos;.git/repo&apos;).trim().tokenize( &apos;/&apos; ))[2]
+                                repoName = (((readFile(&apos;.git/repo&apos;).trim().tokenize( &apos;/&apos; ))[3]).tokenize( &apos;.&apos; ))[0]
+                                buildTrigger(&quot;${repoUser}/${repoName}&quot;,&quot;${JOB_NAME}&quot;);
+                             }
+                            buildStatus(&apos;2&apos;,&apos;0&apos;)
+                        }
+                        else
+                        {
+                             echo &quot;Something Went Wrong&quot;
+                        }
+                        }
+                      }
+                  }
+
+                  stage(&apos;Run&apos;)
+                  {
+                      steps {
+                          script {
+                              if((e2eTest==&apos;true&apos;)||(performanceTest==&apos;true&apos;))
+                              {
+                                  echo &apos;Run&apos;
+                                  def json = readFile(file:&apos;.//package.json&apos;)
+                                  def data = parseJsonToMap(json)
+                                  def start = data.scripts.runner
+                                  def (value1, runCmd) = start.tokenize( &apos; &apos; )
+                                  try {
+                                     echo &quot;forever stop ${runCmd}&quot;
+                                     sh &quot;forever stop ${runCmd}&quot;
+                                  } catch (e) {
+                                   echo &apos;Something failed, I should sound the klaxons!&apos;
+                                  }
+                                  try{
+                                   echo &quot;forever start -l forever.log -o out.log -e err.log ${runCmd}&quot;
+                                   sh &quot;forever start -l forever.log -o out.log -e err.log ${runCmd}&quot;
+                                   echo &apos;Server Ready Yo!&apos;
+                                  } catch (e) {
+                                   echo &apos;optional run failed&apos;
+                                  }
+                              }
+                              else
+                              {
+                                  echo &quot;Skipped run&quot;
+                              }
+                          }
+
+                      }
+                  }
+
+                  stage(&apos;Continous Testing - End to End Testing&apos;)
+                  {
+                        when {
+                          environment name: &apos;e2eTest&apos;, value: &apos;true&apos;
+                        }
+                        steps {
+                              script
+                              {
+
+                                     def value = checkE2eFileExist();
+                                      echo &quot;current working path for e2e ${value}&quot;
+                                      if(value != null)
+                                      {
+                                        echo &quot;e2e path exist inside a build statge e2e test running.&quot;
+                                        if(e2eStatus==&quot;1&quot;)
+                                        {
+                                          def statusE2e=&quot;true&quot;
+                                          echo &quot;Optional State Execution&quot;
+                                          try
+                                          {
+                                            dir(&apos;e2ereport&apos;){
+                                            writeFile file:&apos;report&apos;,text:&apos;&apos;
+                                            }
+                                            sh &apos;npm uninstall puppeteer&apos;
+                                            sh &apos;npm install testcafe-reporter-html-testrail&apos;
+                                            sh &apos;npm install testcafe-browser-provider-puppeteer&apos;
+                                            sh &quot;npm run-script env -- testcafe puppeteer:no_sandbox ${value} --reporter html-testrail&quot;
+                                          }
+                                          catch (err)
+                                          {
+                                            statusE2e =&quot;false&quot;
+                                            echo &apos;something failed&apos;
+                                          }
+                                          publishHTML target: [
+                                                       allowMissing: false,
+                                                       alwaysLinkToLastBuild: false,
+                                                       keepAll: true,
+                                                       reportDir: &apos;e2ereport&apos;,
+                                                       reportFiles: &apos;report.html&apos;,
+                                                       reportName:  &quot;e2e result&quot;
+                                                   ]
+                                                   if(statusE2e == &quot;true&quot;)
+                                                   {
+                                                      buildStatus(&apos;3&apos;,&apos;0&apos;)
+                                                   }
+                                        }
+                                        else if (e2eStatus==&quot;2&quot;)
+                                        {
+                                          echo &quot;Confirmed State Execution&quot;
+                                          dir(&apos;e2ereport&apos;){
+                                          writeFile file:&apos;report&apos;,text:&apos;&apos;
+                                          }
+                                          sh &apos;npm uninstall puppeteer&apos;
+                                          sh &apos;npm install testcafe-reporter-html-testrail&apos;
+                                          sh &apos;npm install testcafe-browser-provider-puppeteer&apos;
+                                          sh &apos;npm run e2etest&apos;
+                                          publishHTML target: [
+                                                     allowMissing: false,
+                                                     alwaysLinkToLastBuild: false,
+                                                     keepAll: true,
+                                                     reportDir: &apos;e2ereport&apos;,
+                                                     reportFiles: &apos;report.html&apos;,
+                                                     reportName:  &quot;e2e result&quot;
+                                                 ]
+                                                 buildStatus(&apos;3&apos;,&apos;0&apos;)
+                                        }
+                                        else
+                                        {
+                                          echo &quot;Something Went Wrong&quot;
+                                        }
+
+                                      }
+                                      else
+                                      {
+                                        buildStatus(&apos;3&apos;,&apos;2&apos;)
+                                      }
+                             }
+                          }
+                    }
+
+
+                  stage(&apos;Continous Testing - Performance Testing - Audit &amp; Performance Metrics&apos;)
+                  {
+                            when {
+                              environment name: &apos;performanceTest&apos;, value: &apos;true&apos;
+                            }
+                            steps{
+                            script {
+                            if(performanceStatus==&quot;1&quot;)
+                            {
+                                  def statusPt=&quot;true&quot;
+                                  echo &quot;Optional State Execution&quot;
+                                  try {
+                                  dir(&apos;report&apos;){
+                                      writeFile file:&apos;dummyfile&apos;,text:&apos;&apos;
+                                  }
+                                  sh &quot;npm run-script env -- lighthouse --output-path=report/lighthouse-report.html --quiet --chrome-flags=&apos;--headless --no-sandbox=true&apos; http://localhost:3000&quot;
+                                  }
+                                  catch (err) {
+                                    statusPt=&quot;false&quot;
+                                    echo err
+                                  }
+                                  publishHTML target: [
+                                      allowMissing: false,
+                                      alwaysLinkToLastBuild: false,
+                                      keepAll: true,
+                                      reportDir: &apos;report&apos;,
+                                      reportFiles: &apos;lighthouse-report.html&apos;,
+                                      reportName: &quot;Web Apps Performance Metrics Report&quot;
+                                  ]
+                                  if(statusPt == &quot;true&quot;)
+                                  {
+                                     buildStatus(&apos;4&apos;,&apos;0&apos;)
+                                  }
+                            }
+                            else if (performanceStatus==&quot;2&quot;)
+                            {
+                                echo &quot;Confirmed State Execution&quot;
+                                dir(&apos;report&apos;){
+                                    writeFile file:&apos;dummyfile&apos;,text:&apos;&apos;
+                                }
+                                sh &apos;npm run lighthouse:ci&apos;
+                                publishHTML target: [
+                                    allowMissing: false,
+                                    alwaysLinkToLastBuild: false,
+                                    keepAll: true,
+                                    reportDir: &apos;report&apos;,
+                                    reportFiles: &apos;lighthouse-report.html&apos;,
+                                    reportName: &quot;Web Apps Performance Metrics Report&quot;
+                                ]
+                                buildStatus(&apos;4&apos;,&apos;0&apos;)
+                            }
+                            else
+                            {
+                                 echo &quot;Something Went Wrong&quot;
+                            }
+                        }
+                      }
+                  }
+
+                  stage(&apos;Hold the Test Site for demo&apos;){
+                          steps{
+                              echo &apos;Sam! Now you can show the test site to the demo audience!&apos;
+                              echo &apos;Do remember that you got only 3 minutes before I destroy the test site :)&apos;
+                          }
+                      }
+
+                  stage(&quot;Docker build&quot;)
+                      {
+                          when {
+                            environment name: &apos;isStaging&apos;, value: &apos;true&apos;
+                          }
+                         steps
+                         {
+                          script
+                          {
+                            //get git commit id for build update
+                            sh &quot;git rev-parse --short HEAD &gt; .git/commit-id&quot;
+                            commit_id = readFile(&apos;.git/commit-id&apos;).trim()
+                            def reg= mongoOut()
+                            docker.withRegistry(&quot;http://${reg}:5000/v2/&quot;)
+                            {
+                             def app = docker.build(&quot;${JOB_NAME}:${commit_id}&quot;, &apos;.&apos;).push()
+                            }
+                          }
+                         }
+                      }
+
+                  stage(&apos;Deploy&apos;)
+                  {
+                          when {
+                            environment name: &apos;isStaging&apos;, value: &apos;true&apos;
+                          }
+                          steps
+                          {
+                            script
+                            {
+                              sh &apos;echo deploy&apos;
+                              def regiD= mongoOut()
+                              sh &quot;echo &apos;_envShell&apos; | tee /etc/ansible/stout.env&quot;
+                              sh &quot;git rev-parse --short HEAD &gt; .git/commit-id&quot;
+                              commitID = readFile(&apos;.git/commit-id&apos;).trim()
+                              if (checkstage() == &quot;&quot;){
+                               sh &quot;ansible-playbook /etc/ansible/stage.yml --extra-vars &apos;dropletoken=_api job=${JOB_NAME} registery_ip=${regiD}:5000 image=${regiD}:5000/${JOB_NAME}:${commitID} file=/etc/ansible/stout.env mongoUrl=_mongoDbUrl&apos;&quot;
+                              }
+                              else{
+                               def limage= checkstage().limage
+                               def stageIP = checkstage().ip
+                               def pvt = checkstage().privateKey
+                               sh &quot;echo ${pvt} | base64 --decode | tee deout.txt&quot;
+                               sh &quot;chmod 600 deout.txt&quot;
+                               sh &quot;ansible-playbook  /etc/ansible/build.yml --extra-vars &apos;variable_host=${stageIP} oldimage=${limage} job=${JOB_NAME} image=${regiD}:5000/${JOB_NAME}:${commitID} ansible_ssh_private_key_file=deout.txt file=/etc/ansible/stout.env mongoUrl=_mongoDbUrl&apos;&quot;
+                              }
+                           }
+                         }
+                       }
+             }
+          }
+        }
+
+        post {
+            success{
+            script{
+            try{
+            if(isEmailEnabled == &quot;true&quot;){
+               echo &apos;Sending mail&apos;
+               notifyEmailSend(&quot;SUCCESSFUL&quot;)
+             }
+             if(isSlackEnabled == &quot;true&quot;){
+                 echo &apos;Sending to Slack&apos;
+                 notifyBuild(&quot;SUCCESSFUL&quot;)
+               }
+            }
+            catch (err) {
+            echo &apos;Notification on Success status Failed!&apos;
+            }
+            }
+             echo &apos;SUCCESSFUL!&apos;
+            }
+            failure{
+            script{
+            try{
+            if(isEmailEnabled == &quot;true&quot;){
+               echo &apos;Sending mail&apos;
+               notifyEmailSend(&quot;FAILED&quot;)
+             }
+             if(isSlackEnabled == &quot;true&quot;){
+                 echo &apos;Sending to Slack&apos;
+                 notifyBuild(&quot;FAILED&quot;)
+               }
+            }
+            catch (err) {
+            echo &apos;Notification on Failure status Failed!&apos;
+            }
+            }
+            echo &apos;FAILED!&apos;
+            }
+            always {
+                finalStatusSend(&quot;${currentBuild.currentResult}&quot;)
+                echo &apos;I will always say Hello again!&apos;
+            }
+        }
+    }
+
+    def notifyBuild(String buildStatus = &apos;STARTED&apos;) {
+        // build status of null means successful
+        buildStatus = buildStatus ?: &apos;SUCCESSFUL&apos;
+
+        // Default values
+        def slackbaseUrl=  &apos;_slackBaseUrl&apos;
+        def tokenKey= &apos;_slackToken&apos;
+        def colorName = &apos;RED&apos;
+        def colorCode = &apos;#FF0000&apos;
+
+
+        // Override default values based on build status
+        if (buildStatus == &apos;STARTED&apos;) {
+            color = &apos;YELLOW&apos;
+            colorCode = &apos;#FFFF00&apos;
+            buildStatus = &apos;Initiated successfully&apos;
+        } else if (buildStatus == &apos;SUCCESSFUL&apos;) {
+            color = &apos;GREEN&apos;
+            colorCode = &apos;#00FF00&apos;
+            buildStatus = &apos;Completed successfully&apos;
+        } else if (buildStatus == &apos;JOB_COMPLETED&apos;) {
+            color = &apos;MAGENTA&apos;
+            colorCode = &apos;#FF00FF&apos;
+            buildStatus = &apos;Completed successfully&apos;
+        }
+        else {
+            color = &apos;RED&apos;
+            colorCode = &apos;#FF0000&apos;
+            buildStatus = &apos;Completed unsuccessfully&apos;
+        }
+
+        def subject = &quot;Job ${buildStatus} - ${env.JOB_NAME} - Build ${env.BUILD_NUMBER}&quot;
+        def summary = &quot;${subject}&quot;
+
+        <!-- // Send notifications
+        //slackSend(color: colorCode, message: summary) -->
+        slackSend(baseUrl: slackbaseUrl , token: tokenKey ,color: colorCode, message: summary)
+    }
+
+    def notifyEmailSend(String buildStatus = &apos;STARTED&apos;) {
+        // build status of null means successful
+        buildStatus = buildStatus ?: &apos;SUCCESSFUL&apos;
+
+        // Override default values based on build status
+        if (buildStatus == &apos;STARTED&apos;) {
+            buildStatus = &apos;Initiated successfully&apos;
+        } else if (buildStatus == &apos;SUCCESSFUL&apos;) {
+            buildStatus = &apos;Completed successfully&apos;
+        } else if (buildStatus == &apos;JOB_COMPLETED&apos;) {
+            buildStatus = &apos;Completed successfully&apos;
+        }
+        else {
+            buildStatus = &apos;Completed unsuccessfully&apos;
+        }
+
+        // Default values
+        def subject = &quot;Job ${buildStatus} - ${env.JOB_NAME} - Build ${env.BUILD_NUMBER}&quot;
+        def summary = &quot;${subject}&quot;
+        def details = &quot;&quot;&quot; Your Job&apos;s build has been ${buildStatus}. \n\n Sent from JustOps.io&quot;&quot;&quot;
+
+         mail to: &apos;_notifyEmail&apos;,
+         subject: summary,
+         body: details
+    }
+
+    def buildTrigger(repo,sonarAppName)
+    {
+             def post = new URL(&quot;http://178.128.170.151:8080/r/ironfn/buildjob&quot;).openConnection();
+             def builder = new groovy.json.JsonBuilder()
+             def result = [&quot;fromMail&quot;:&quot;deva@cogzidel.com&quot;,&quot;repo&quot;:repo,&quot;sonarAppName&quot;:sonarAppName,&quot;sonarUri&quot;:&quot;_sonarUrl&quot;,&quot;host&quot;:&quot;_domainUrl&quot;,&quot;mongoDBURI&quot;:&quot;_mongoDbUrl&quot;,&quot;webhost&quot;:&quot;_appDomainUrl&quot;]
+             builder result
+             out = builder.toPrettyString()
+             def message = out
+             post.setRequestMethod(&quot;POST&quot;)
+             post.setDoOutput(true)
+             post.setRequestProperty(&quot;Content-Type&quot;, &quot;application/json&quot;)
+             post.getOutputStream().write(message.getBytes(&quot;UTF-8&quot;));
+             def postRC = post.getResponseCode();
+             if(postRC.equals(200))
+               {
+                 return post.getInputStream().getText()
+                }
+
+    }
+
+  </script>
+  <sandbox>true</sandbox>
+</definition>
+<triggers/>
+<disabled>false</disabled>
+</flow-definition>
